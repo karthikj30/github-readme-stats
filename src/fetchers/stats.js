@@ -329,6 +329,8 @@ const fetchStats = async (
     reviews: stats.totalReviews,
     issues: stats.totalIssues,
     repos: user.repositories.totalCount,
+    // The legacy scale weights repos-contributed-to; the current one ignores it.
+    contributedTo: stats.contributedTo,
     stars: stats.totalStars,
     followers: user.followers.totalCount,
   });
