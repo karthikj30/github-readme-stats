@@ -32,14 +32,17 @@ const DURATIONS = {
  * Common cache TTL values in seconds.
  */
 const CACHE_TTL = {
+  // MIN is lowered from TWELVE_HOURS / TWO_DAY. Upstream's floors exist to
+  // protect a shared public instance from load; this deployment serves one
+  // profile, so they only made card changes invisible for up to two days.
   STATS_CARD: {
     DEFAULT: DURATIONS.ONE_DAY,
-    MIN: DURATIONS.TWELVE_HOURS,
+    MIN: DURATIONS.TEN_MINUTES,
     MAX: DURATIONS.TWO_DAY,
   },
   TOP_LANGS_CARD: {
     DEFAULT: DURATIONS.SIX_DAY,
-    MIN: DURATIONS.TWO_DAY,
+    MIN: DURATIONS.TEN_MINUTES,
     MAX: DURATIONS.TEN_DAY,
   },
   PIN_CARD: {
