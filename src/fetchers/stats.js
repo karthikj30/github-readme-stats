@@ -1,6 +1,5 @@
 // @ts-check
 
-import axios from "axios";
 import * as dotenv from "dotenv";
 import githubUsernameRegex from "github-username-regex";
 import { calculateRank } from "../calculateRank.js";
@@ -159,57 +158,82 @@ const statsFetcher = async ({
 };
 
 /**
- * Fetch total commits using the REST API.
+ * Sums commit contributions across every year since the account was created.
  *
- * @param {object} variables Fetcher variables.
- * @param {string} token GitHub token.
- * @returns {Promise<import('axios').AxiosResponse>} Axios response.
- *
- * @see https://developer.github.com/v3/search/#search-commits
- */
-const fetchTotalCommits = (variables, token) => {
-  return axios({
-    method: "get",
-    url: `https://api.github.com/search/commits?q=author:${variables.login}`,
-    headers: {
-      "Content-Type": "application/json",
-      Accept: "application/vnd.github.cloak-preview",
-      Authorization: `token ${token}`,
-    },
-  });
-};
-
-/**
- * Fetch all the commits for all the repositories of a given username.
+ * This replaces the previous REST implementation, which searched GitHub's
+ * commit index. That index only covers public repositories, so
+ * include_all_commits reported a small fraction of real activity while
+ * simultaneously raising the rank algorithm's commit median - the flag made
+ * the card both less accurate and worse-ranked than leaving it off.
+ * contributionsCollection caps at one year per call, so walk year by year and
+ * add the totals. Windows start at midnight UTC so no day straddles a boundary.
  *
  * @param {string} username GitHub username.
- * @returns {Promise<number>} Total commits.
- *
- * @description Done like this because the GitHub API does not provide a way to fetch all the commits. See
- * #92#issuecomment-661026467 and #211 for more information.
+ * @returns {Promise<number>} All-time commit contributions.
  */
-const totalCommitsFetcher = async (username) => {
+const allTimeCommitsFetcher = async (username) => {
   if (!githubUsernameRegex.test(username)) {
     logger.log("Invalid username provided.");
     throw new Error("Invalid username provided.");
   }
 
-  let res;
-  try {
-    res = await retryer(fetchTotalCommits, { login: username });
-  } catch (err) {
-    logger.log(err);
-    throw new Error(err);
-  }
+  const createdRes = await retryer(
+    (variables, token) =>
+      request(
+        {
+          query: `query($login:String!){ user(login:$login){ createdAt } }`,
+          variables: { login: variables.login },
+        },
+        { Authorization: `bearer ${token}` },
+      ),
+    { login: username },
+  );
 
-  const totalCount = res.data.total_count;
-  if (!totalCount || isNaN(totalCount)) {
+  const createdAt = createdRes.data.data?.user?.createdAt;
+  if (!createdAt) {
     throw new CustomError(
-      "Could not fetch total commits.",
+      "Could not fetch account creation date.",
       CustomError.GITHUB_REST_API_ERROR,
     );
   }
-  return totalCount;
+
+  const from = new Date(createdAt);
+  from.setUTCHours(0, 0, 0, 0);
+  const now = new Date();
+  let total = 0;
+
+  for (; from < now; from.setUTCFullYear(from.getUTCFullYear() + 1)) {
+    const to = new Date(from);
+    to.setUTCFullYear(to.getUTCFullYear() + 1);
+    const res = await retryer(
+      (variables, token) =>
+        request(
+          {
+            query: `query($login:String!,$from:DateTime!,$to:DateTime!){
+              user(login:$login){
+                contributionsCollection(from:$from,to:$to){ totalCommitContributions }
+              }
+            }`,
+            variables: {
+              login: variables.login,
+              from: variables.from,
+              to: variables.to,
+            },
+          },
+          { Authorization: `bearer ${token}` },
+        ),
+      {
+        login: username,
+        from: from.toISOString(),
+        to: (to > now ? now : to).toISOString(),
+      },
+    );
+    total +=
+      res.data.data?.user?.contributionsCollection?.totalCommitContributions ??
+      0;
+  }
+
+  return total;
 };
 
 /**
@@ -287,7 +311,7 @@ const fetchStats = async (
 
   // if include_all_commits, fetch all commits using the REST API.
   if (include_all_commits) {
-    stats.totalCommits = await totalCommitsFetcher(username);
+    stats.totalCommits = await allTimeCommitsFetcher(username);
   } else {
     stats.totalCommits = user.commits.totalCommitContributions;
   }
